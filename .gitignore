@@ -1,6 +1,8 @@
-venv/
-.env
+﻿venv/
+.venv/
+node_modules/
 __pycache__/
-*.pyc
-.DS_Store
-.vscode/
+.env
+.env.local
+dist/
+build/
