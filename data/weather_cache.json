@@ -1,0 +1,7 @@
+{
+  "Z1": {"temperature": 26.5, "humidity": 92, "rainfall_mm": 35.0, "weather_risk": 75, "description": "heavy intensity rain"},
+  "Z2": {"temperature": 28.0, "humidity": 70, "rainfall_mm": 10.0, "weather_risk": 45, "description": "light rain"},
+  "Z3": {"temperature": 25.8, "humidity": 95, "rainfall_mm": 48.0, "weather_risk": 88, "description": "very heavy rain"},
+  "Z4": {"temperature": 29.1, "humidity": 60, "rainfall_mm": 2.0, "weather_risk": 20, "description": "few clouds"},
+  "Z5": {"temperature": 27.2, "humidity": 85, "rainfall_mm": 22.0, "weather_risk": 62, "description": "moderate rain"}
+}

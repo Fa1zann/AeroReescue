@@ -1,0 +1,4 @@
+hospital_id,name,latitude,longitude,bed_capacity,status,contact
+H1,City General Hospital,12.9750,77.5880,150,Operational,+91-80-5551234
+H2,St. Jude Emergency Center,12.9620,77.5980,80,Operational,+91-80-5555678
+H3,Riverside Clinic,12.9680,77.6150,30,At Capacity,+91-80-5559012

@@ -1,0 +1,6 @@
+zone_id,zone_name,latitude,longitude,flood_severity,population_exposure,weather_risk,road_accessibility,infrastructure_exposure,elevation_m
+Z1,Kuvempunagar,12.9716,77.5946,85,75,60,30,70,820
+Z2,Vijayanagar,12.9800,77.6000,40,90,50,80,30,880
+Z3,Hebbal,12.9650,77.6100,95,30,80,20,85,805
+Z4,Saraswathipuram,12.9550,77.5700,20,40,30,90,20,940
+Z5,Nazarbad,12.9400,77.5850,60,85,70,50,60,835

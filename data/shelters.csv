@@ -1,0 +1,4 @@
+shelter_id,name,latitude,longitude,current_occupancy,max_capacity,supplies_status
+S1,Central High School Gymnasium,12.9780,77.5920,320,500,Adequate
+S2,East Community Center,12.9580,77.6050,180,200,Low Food/Water
+S3,South Sports Complex,12.9380,77.5800,90,400,Adequate
