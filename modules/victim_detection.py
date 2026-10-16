@@ -1,187 +1,233 @@
 """
 modules/victim_detection.py
-Professional Aerial SAR (Search & Rescue) Engine.
-Uses Morphological Top-Hat/Black-Hat Transforms to find high-contrast human anomalies
-in both flood waters and earthquake rubble, with tactical UI overlays.
+OVERWATCH2 aerial flood-water segmentation.
+
+This module detects visible water only. Victim detection and person-size
+estimation are intentionally not implemented. The legacy function name
+analyze_victim_imagery is retained temporarily so existing app.py imports do
+not break; it returns water-analysis results only.
+
+Important: colour-based segmentation is a heuristic. Green vegetation, roofs,
+shadows, and reflections may still cause false positives/negatives. A trained
+segmentation model and representative labelled drone images are needed for
+reliable operational use.
 """
+
+from __future__ import annotations
 
 import cv2
 import numpy as np
 import streamlit as st
-import folium
+
 
 def init_victim_state():
-    """Initializes session state for victim tracking."""
+    """Legacy compatibility only; no victim detections are performed."""
     if "victim_detections" not in st.session_state:
         st.session_state["victim_detections"] = []
 
-def nms_filter(boxes, overlap_thresh=0.2):
-    """Non-Maximum Suppression to purge overlapping duplicate boxes."""
-    if not boxes:
-        return []
-    boxes_np = np.array(boxes)
-    pick = []
-    x1 = boxes_np[:, 0]
-    y1 = boxes_np[:, 1]
-    x2 = boxes_np[:, 0] + boxes_np[:, 2]
-    y2 = boxes_np[:, 1] + boxes_np[:, 3]
-    scores = boxes_np[:, 4]
-    area = (x2 - x1 + 1) * (y2 - y1 + 1)
-    idxs = np.argsort(scores)
-    
-    while len(idxs) > 0:
-        last = len(idxs) - 1
-        i = idxs[last]
-        pick.append(i)
-        
-        xx1 = np.maximum(x1[i], x1[idxs[:last]])
-        yy1 = np.maximum(y1[i], y1[idxs[:last]])
-        xx2 = np.minimum(x2[i], x2[idxs[:last]])
-        yy2 = np.minimum(y2[i], y2[idxs[:last]])
-        
-        w = np.maximum(0, xx2 - xx1 + 1)
-        h = np.maximum(0, yy2 - yy1 + 1)
-        overlap = (w * h) / area[idxs[:last]]
-        idxs = np.delete(idxs, np.concatenate(([last], np.where(overlap > overlap_thresh)[0])))
-        
-    return [boxes[p] for p in pick]
 
-def draw_tactical_bracket(img, x, y, w, h, color=(0, 165, 255)):
-    """Draws a professional SAR targeting bracket (corners only + center dot)."""
-    t = 2  # Thickness
-    l = int(max(w, h) * 0.3)  # Corner length
-    l = max(3, l)
-    
-    # Top-Left
-    cv2.line(img, (x, y), (x + l, y), color, t)
-    cv2.line(img, (x, y), (x, y + l), color, t)
-    # Top-Right
-    cv2.line(img, (x + w, y), (x + w - l, y), color, t)
-    cv2.line(img, (x + w, y), (x + w, y + l), color, t)
-    # Bottom-Left
-    cv2.line(img, (x, y + h), (x + l, y + h), color, t)
-    cv2.line(img, (x, y + h), (x, y + h - l), color, t)
-    # Bottom-Right
-    cv2.line(img, (x + w, y + h), (x + w - l, y + h), color, t)
-    cv2.line(img, (x + w, y + h), (x + w, y + h - l), color, t)
-    # Center precision dot
-    cv2.circle(img, (x + w // 2, y + h // 2), 1, (0, 255, 0), -1)
+def _decode_image_bytes(image_bytes):
+    raw = np.frombuffer(image_bytes or b"", dtype=np.uint8)
+    if raw.size == 0:
+        return None
+    return cv2.imdecode(raw, cv2.IMREAD_COLOR)
 
-def detect_sar_anomalies(img, sensitivity, target_size):
-    """
-    Combines Top-Hat and Black-Hat transforms to find small objects (people) 
-    that contrast against large backgrounds (water/rubble).
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray_clahe = clahe.apply(gray)
-    
-    k_size = int(target_size * 1.5)
-    k_size = max(3, k_size if k_size % 2 != 0 else k_size + 1)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-    
-    tophat = cv2.morphologyEx(gray_clahe, cv2.MORPH_TOPHAT, kernel)
-    blackhat = cv2.morphologyEx(gray_clahe, cv2.MORPH_BLACKHAT, kernel)
-    
-    anomalies = cv2.add(tophat, blackhat)
-    
-    thresh_val = int(255 - (sensitivity * 2.0))
-    thresh_val = max(15, min(240, thresh_val))
-    _, thresh = cv2.threshold(anomalies, thresh_val, 255, cv2.THRESH_BINARY)
-    
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    boxes = []
-    min_area = int(target_size * 0.3)
-    max_area = int(target_size * 8.0)
-    
-    for c in contours:
-        area = cv2.contourArea(c)
-        if min_area < area < max_area:
-            x, y, w, h = cv2.boundingRect(c)
-            aspect = float(w) / max(1, h)
-            
-            if 0.2 <= aspect <= 4.0:
-                intensity = np.mean(anomalies[y:y + h, x:x + w])
-                conf = round(min(99.5, 60.0 + (intensity / 255.0) * 39.5), 1)
-                boxes.append([x, y, w, h, conf])
-                
-    return nms_filter(boxes, overlap_thresh=0.2)
 
-def analyze_victim_imagery(image_bytes, sector_lat, sector_lon, sector_name, sensitivity=70.0, target_size=20):
+def _odd_kernel(value, maximum=15):
+    value = max(3, min(int(value), maximum))
+    return value if value % 2 else value + 1
+
+
+def detect_flood_water_mask(img_bgr, min_component_ratio=0.00008):
     """
-    Analyzes drone imagery with target_size and sensitivity tuning parameters.
+    Return (mask, flood_percentage), where mask is uint8 (water=255).
+
+    Strategy:
+      * combine broad HSV water-colour bands for teal, green/murky, and muddy
+        water rather than relying on one narrow hue range;
+      * add a LAB colour check to recover some water affected by white balance;
+      * suppress only very bright, low-saturation glare;
+      * use modest morphology and a low component-area cutoff so small pools
+        and narrow water channels are not discarded.
+
+    Do not interpret the percentage as geographic flood coverage: it is the
+    percentage of pixels in this image classified as water.
+    """
+    if img_bgr is None or not isinstance(img_bgr, np.ndarray) or img_bgr.size == 0:
+        raise ValueError("Image is empty or invalid.")
+    if img_bgr.ndim == 2:
+        img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2BGR)
+    elif img_bgr.ndim == 3 and img_bgr.shape[2] == 4:
+        img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_BGRA2BGR)
+    elif img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
+        raise ValueError("Expected a grayscale, BGR, or BGRA image.")
+
+    h, w = img_bgr.shape[:2]
+    total_pixels = max(1, h * w)
+
+    # Mild smoothing reduces compression noise without blurring large regions.
+    smooth = cv2.GaussianBlur(img_bgr, (5, 5), 0)
+    hsv = cv2.cvtColor(smooth, cv2.COLOR_BGR2HSV)
+    lab = cv2.cvtColor(smooth, cv2.COLOR_BGR2LAB)
+
+    H, S, V = cv2.split(hsv)
+    L, A, B = cv2.split(lab)
+
+    # OpenCV hue uses 0..179, not 0..360.
+    # Floodwater varies significantly with camera, turbidity, and sunlight.
+    teal = (
+        (H >= 68) & (H <= 112) &
+        (S >= 18) & (V >= 28) & (V <= 242)
+    )
+
+    green_murky = (
+        (H >= 34) & (H <= 82) &
+        (S >= 16) & (S <= 170) &
+        (V >= 28) & (V <= 205)
+    )
+
+    muddy_or_silty = (
+        (H >= 7) & (H <= 29) &
+        (S >= 22) & (V >= 28) & (V <= 190)
+    )
+
+    # LAB fallback: water can shift hue under shadows/white balance. Keep this
+    # band intentionally restrained because LAB alone can select vegetation.
+    lab_blue_green = (
+        (A >= 105) & (A <= 145) &
+        (B >= 105) & (B <= 155) &
+        (L >= 25) & (L <= 190) &
+        (S >= 12)
+    )
+
+    candidate = teal | green_murky | muddy_or_silty | lab_blue_green
+
+    # Remove near-white sun glare, not all bright pixels. The previous approach
+    # used dilated Canny edges and erased legitimate water near every structure.
+    glare = (V >= 228) & (S <= 34)
+    candidate &= ~glare
+
+    # Extremely dark, nearly neutral pixels have unreliable colour information.
+    candidate &= ~((V < 22) & (S < 50))
+
+    mask = candidate.astype(np.uint8) * 255
+
+    # Morphology should join small breaks without swallowing narrow waterways.
+    kernel_size = _odd_kernel(round(min(h, w) * 0.004), maximum=11)
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
+    )
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    # Keep smaller connected areas than the original 0.2% frame threshold.
+    minimum_area = max(10, int(total_pixels * max(0.0, min_component_ratio)))
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask, connectivity=8
+    )
+    cleaned = np.zeros_like(mask)
+    for label in range(1, component_count):
+        if stats[label, cv2.CC_STAT_AREA] >= minimum_area:
+            cleaned[labels == label] = 255
+
+    water_pixels = cv2.countNonZero(cleaned)
+    percentage = round(100.0 * water_pixels / total_pixels, 2)
+    return cleaned, percentage
+
+
+def _severity_from_percentage(flood_percentage):
+    """Simple image-coverage indicator, not a real-world flood-risk score."""
+    pct = max(0.0, min(100.0, float(flood_percentage)))
+    if pct < 30:
+        score = pct * 1.5
+    else:
+        score = 40 + pct * 0.8
+    return int(max(0, min(100, round(score))))
+
+
+def _overlay_water(img_bgr, water_mask, alpha=0.38):
+    """Blend cyan over detected water and draw a clear boundary."""
+    overlay = img_bgr.copy()
+    cyan = np.zeros_like(img_bgr)
+    cyan[:] = (255, 220, 0)  # BGR cyan
+    selected = cv2.bitwise_and(cyan, cyan, mask=water_mask)
+    overlay = cv2.addWeighted(overlay, 1.0, selected, alpha, 0)
+    contours, _ = cv2.findContours(
+        water_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    cv2.drawContours(overlay, contours, -1, (255, 190, 0), 2)
+    return overlay
+
+
+def analyze_victim_imagery(
+    img_bytes,
+    lat=None,
+    lon=None,
+    sector_name="Unknown sector",
+    sensitivity=70.0,
+    target_size=None,
+    use_sahi=False,
+    apply_scene_mask=False,
+    dedupe_iou=0.20,
+):
+    """
+    Legacy-compatible entry point for existing imports.
+
+    `target_size` is accepted only for backward compatibility and is ignored.
+    No person-size estimation or victim detection is performed.
     """
     init_victim_state()
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    
-    if img is None:
-        raise ValueError("Could not decode image bytes for victim detection.")
+    img_bgr = _decode_image_bytes(img_bytes)
+    if img_bgr is None:
+        return {
+            "error": "Corrupt or missing image file.",
+            "annotated_image": None,
+            "flood_percentage": 0.0,
+            "calculated_severity": 0,
+        }
 
-    h, w = img.shape[:2]
-    scale = 800.0 / max(h, w)
-    resized = cv2.resize(img, (int(w * scale), int(h * scale)))
-    
-    detected_boxes = detect_sar_anomalies(resized, sensitivity, target_size)
-    
-    annotated_img = resized.copy()
-    new_detections = []
-    
-    for idx, (x_b, y_b, bw_b, bh_b, conf_score) in enumerate(detected_boxes):
-        det_id = f"VICTIM-{len(st.session_state['victim_detections']) + idx + 1:03d}"
-        
-        draw_tactical_bracket(annotated_img, x_b, y_b, bw_b, bh_b)
-        
-        label = f"ID:{det_id[-3:]} | {conf_score}%"
-        cv2.putText(annotated_img, label, (x_b, max(12, y_b - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 165, 255), 1, cv2.LINE_AA)
-        
-        lat_offset = (y_b - (resized.shape[0] / 2.0)) * 0.000012
-        lon_offset = (x_b - (resized.shape[1] / 2.0)) * 0.000012
-        
-        new_detections.append({
-            "id": det_id,
-            "sector": sector_name,
-            "confidence": conf_score,
-            "status": "UNVERIFIED",
-            "lat": sector_lat + lat_offset,
-            "lon": sector_lon + lon_offset
-        })
-
-    _, buffer = cv2.imencode('.jpg', annotated_img)
-
+    mask, flood_percentage = detect_flood_water_mask(img_bgr)
+    annotated_bgr = _overlay_water(img_bgr, mask)
     return {
-        "annotated_image": buffer.tobytes(),
-        "victim_count": len(new_detections),
-        "detections": new_detections
+        "annotated_image": cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB),
+        "flood_percentage": flood_percentage,
+        "calculated_severity": _severity_from_percentage(flood_percentage),
+        "water_mask": mask,
+        "water_surface_type": "Heuristic surface-water segmentation",
+        "sector_name": sector_name,
+        "latitude": lat,
+        "longitude": lon,
     }
 
-def add_victim_layer_to_map(m, victim_detections):
-    """Overlays victim detection markers onto the Folium map."""
-    if not victim_detections:
-        return m
 
-    fg_victims = folium.FeatureGroup(name="🆘 Aerial SAR Detections", show=True)
-    for v in victim_detections:
-        is_verified = v.get("status") == "VERIFIED"
-        icon_color = "green" if is_verified else "orange"
-        status_text = "✅ GROUND CONFIRMED" if is_verified else "⚠️ UNVERIFIED (Needs Verification)"
-        
-        popup_html = f"""
-        <div style="font-family: Arial, sans-serif; width: 220px;">
-            <h4 style="margin: 0 0 4px 0; color: {'#10B981' if is_verified else '#F59E0B'};">🆘 {v['id']}</h4>
-            <b>Sector:</b> {v['sector']}<br>
-            <b>SAR Confidence:</b> {v['confidence']}%<br>
-            <b>Status:</b> <br><span style="color: {'#10B981' if is_verified else '#EF4444'}; font-weight: bold;">{status_text}</span>
-        </div>
-        """
-        folium.Marker(
-            location=[v['lat'], v['lon']],
-            popup=folium.Popup(popup_html, max_width=230),
-            tooltip=f"🆘 {v['id']} ({v['confidence']}%) - {v['status']}",
-            icon=folium.Icon(color=icon_color, icon="crosshairs", prefix="fa")
-        ).add_to(fg_victims)
+def analyze_aerial_image(image_bytes):
+    """Analyse an uploaded aerial image and return a JPEG overlay plus metrics."""
+    img_bgr = _decode_image_bytes(image_bytes)
+    if img_bgr is None:
+        raise ValueError("Could not decode image. Upload a valid JPG or PNG.")
 
-    fg_victims.add_to(m)
+    mask, flood_percentage = detect_flood_water_mask(img_bgr)
+    overlay_bgr = _overlay_water(img_bgr, mask)
+    ok, encoded = cv2.imencode(
+        ".jpg", overlay_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92]
+    )
+    if not ok:
+        raise RuntimeError("Could not encode processed image.")
+
+    return {
+        "processed_image": encoded.tobytes(),
+        "flood_percentage": flood_percentage,
+        "calculated_severity": _severity_from_percentage(flood_percentage),
+        "confidence_score": None,
+        "water_surface_type": "Heuristic surface flood-water segmentation",
+        "water_mask": mask,
+    }
+
+
+# Retained only to avoid breaking older imports elsewhere in the application.
+def log_detections(new_detections, lat, lon, existing):
+    return []
+
+
+def add_victim_layer_to_map(m, detections):
     return m

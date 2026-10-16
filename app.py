@@ -1,7 +1,6 @@
 """
 app.py - OVERWATCH2 Command Center
-Two-Color Tactical Platform with 3D Physics Buttons, Reaching Time Calculation,
-Esri Satellite View, Animal Rescue Dispatch, and Victim Verification Engine.
+Tactical disaster intelligence, GIS mapping, flood forecasting, and water analysis.
 """
 
 import streamlit as st
@@ -23,7 +22,6 @@ from modules.voice_navigation import render_voice_controller
 from modules.theme import inject_command_center_theme, apply_plotly_command_center_theme
 from modules.animal_rescue import render_animal_rescue_widget
 from modules.radar_chart import create_sector_radar_chart
-from modules.victim_detection import analyze_victim_imagery, init_victim_state
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIG & THEME
@@ -69,7 +67,6 @@ custom_weights = {
 rescuer_loc = render_location_widget()
 sos_requests = render_sos_widget()
 animal_alerts = render_animal_rescue_widget()
-init_victim_state()
 render_voice_controller()
 
 # -----------------------------------------------------------------------------
@@ -167,14 +164,12 @@ if data_loaded:
     df_search = calculate_search_priorities(df_risk, df_forecast, sos_requests)
     top_target = df_search.iloc[0]
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     critical_count = len(df_risk[df_risk['risk_category'] == 'CRITICAL'])
-    unverified_victims = len([v for v in st.session_state.get('victim_detections', []) if v.get('status') == 'UNVERIFIED'])
 
     c1.metric("Monitored Sectors", f"{len(df_risk)} Localities")
     c2.metric("CRITICAL Threat Sectors", f"{critical_count} Localities", delta="Immediate Action", delta_color="inverse")
     c3.metric("Top Dispatch Target", top_target['zone_name'], delta=f"Priority: {top_target['search_priority']}/100")
-    c4.metric("AI Victim Detections", f"{len(st.session_state.get('victim_detections', []))} Detected", delta=f"{unverified_victims} Unverified", delta_color="inverse")
 
     st.info(f"🚁 **NEXT SEARCH & RESCUE TARGET:** **{top_target['zone_name']}** (Priority Index: `{top_target['search_priority']} / 100`) — *Key Factors: {top_target['reasons']}*")
 
@@ -258,11 +253,24 @@ if current_page == "GIS Map":
             "+6 Hours": ("score_6h", "cat_6h")
         }
         score_col, cat_col = horizon_cols[forecast_horizon]
-        
+
+        # Forecast scores can be decimals (for example, 85.9).
+        # Convert the column to float before assigning forecast values.
+        df_map_projected["risk_score"] = pd.to_numeric(
+            df_map_projected["risk_score"], errors="coerce"
+        ).astype(float)
+
         for idx, row in df_map_projected.iterrows():
-            f_row = df_forecast[df_forecast['zone_id'] == row['zone_id']].iloc[0]
-            df_map_projected.at[idx, 'risk_score'] = f_row[score_col]
-            df_map_projected.at[idx, 'risk_category'] = f_row[cat_col]
+            matching_forecast = df_forecast[
+                df_forecast["zone_id"] == row["zone_id"]
+            ]
+
+            if matching_forecast.empty:
+                continue
+
+            f_row = matching_forecast.iloc[0]
+            df_map_projected.at[idx, "risk_score"] = float(f_row[score_col])
+            df_map_projected.at[idx, "risk_category"] = f_row[cat_col]
 
         st.markdown("---")
         st.markdown("#### 🚑 Safest Rescue Route & Live Reaching Time Calculator")
@@ -299,8 +307,7 @@ if current_page == "GIS Map":
 
         folium_map = build_disaster_map(
             df_map_projected, df_hospitals, df_shelters, rescuer_location=rescuer_loc,
-            sos_requests=sos_requests, active_route=active_route, animal_alerts=animal_alerts,
-            victim_detections=st.session_state.get('victim_detections', [])
+            sos_requests=sos_requests, active_route=active_route, animal_alerts=animal_alerts
         )
         st_folium(folium_map, width="100%", height=520)
 
@@ -314,85 +321,60 @@ elif current_page == "Prediction":
 
 # PAGE 3: AERIAL DRONE VISION ENGINE
 elif current_page == "Vision":
-    st.subheader("📸 Aerial Drone Vision Workspace")
-    
-    c_u1, c_u2, c_u3 = st.columns([2, 1, 1])
-    with c_u1:
-        uploaded_file = st.file_uploader("Upload Drone Photo", type=["jpg", "jpeg", "png"])
-    with c_u2:
-        sensitivity_level = st.slider("🔍 SAR Anomaly Sensitivity:", 20.0, 100.0, 70.0, 5.0, help="Slide left to ignore debris. Slide right to find faint targets.")
-    with c_u3:
-        target_size = st.slider("📏 Target Person Size (px):", 10, 80, 20, 5, help="Match this to how large humans appear in the photo (Drone Altitude).")
+    st.subheader("📸 Aerial Drone Flood-Water Analysis")
+    st.caption(
+        "Upload an aerial image to highlight likely visible water. "
+        "Coverage and severity are image-based estimates, not verified geographic measurements."
+    )
 
-    img_bytes = None
-    if uploaded_file is not None:
-        img_bytes = uploaded_file.read()
-    elif os.path.exists("assets/sample_drone_flood.jpg"):
+    uploaded_file = st.file_uploader(
+        "Upload Drone Photo", type=["jpg", "jpeg", "png"]
+    )
+
+    img_bytes = uploaded_file.getvalue() if uploaded_file is not None else None
+    if img_bytes is None and os.path.exists("assets/sample_drone_flood.jpg"):
         with open("assets/sample_drone_flood.jpg", "rb") as f:
             img_bytes = f.read()
 
     if img_bytes is not None:
         try:
-            target_zone_name = st.selectbox("Select Target Sector for Drone Analysis:", df_risk['zone_name'])
-            target_row = df_risk[df_risk['zone_name'] == target_zone_name].iloc[0]
-
+            target_zone_name = st.selectbox(
+                "Select Target Sector for Drone Analysis:", df_risk["zone_name"]
+            )
             res_flood = analyze_aerial_image(img_bytes)
-            res_victim = analyze_victim_imagery(
-                img_bytes, target_row['latitude'], target_row['longitude'], target_zone_name, 
-                sensitivity=sensitivity_level, target_size=target_size
+
+            st.image(
+                res_flood["processed_image"],
+                caption="Original Aerial Image + Detected Water Overlay",
+                use_container_width=True,
             )
 
-            col_v1, col_v2 = st.columns(2)
-            with col_v1:
-                st.image(res_flood['processed_image'], caption="1. Original Image + Translucent Water Map", use_container_width=True)
-                st.info(f"**Terrain:** `{res_flood['water_surface_type']}` | **Water Coverage:** `{res_flood['flood_percentage']}%` | **Severity:** `{res_flood['calculated_severity']}/100`")
-                
-            with col_v2:
-                st.image(res_victim['annotated_image'], caption="2. AI Victim Detection Overlay", use_container_width=True)
-                st.warning(f"🆘 **Estimated Victims Detected:** `{res_victim['victim_count']} Person(s)` (⚠️ UNVERIFIED)")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Detected Water Coverage", f'{res_flood["flood_percentage"]}%')
+            m2.metric("Image Severity Indicator", f'{res_flood["calculated_severity"]}/100')
+            m3.metric("Analysis Mode", "Experimental CV")
 
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                if st.button("🚀 Fuse Inundation Findings to GIS Map", type="primary", use_container_width=True):
-                    target_zone_id = df_risk[df_risk['zone_name'] == target_zone_name]['zone_id'].values[0]
-                    st.session_state["zone_overrides"][target_zone_id] = res_flood['calculated_severity']
-                    st.success("Flood severity updated!")
-                    st.rerun()
+            st.caption(
+                "Detection is based on image colour and morphology. Review the overlay manually; "
+                "vegetation, shadows, roofs, and glare can affect results."
+            )
 
-            with col_f2:
-                if st.button("🆘 Log AI Victim Detections to Map (Unverified)", use_container_width=True):
-                    st.session_state["victim_detections"].extend(res_victim["detections"])
-                    st.sidebar.success(f"{res_victim['victim_count']} Victim Detections Logged!")
-                    st.rerun()
+            if st.button(
+                "🚀 Fuse Inundation Findings to GIS Map",
+                type="primary",
+                use_container_width=True,
+            ):
+                target_zone_id = df_risk.loc[
+                    df_risk["zone_name"] == target_zone_name, "zone_id"
+                ].values[0]
+                st.session_state["zone_overrides"][target_zone_id] = res_flood[
+                    "calculated_severity"
+                ]
+                st.success("Flood severity updated!")
+                st.rerun()
 
-            if st.session_state.get("victim_detections"):
-                st.markdown("---")
-                st.subheader("📋 Ground Verification Control Matrix")
-
-                to_delete = None
-                for idx, v in enumerate(st.session_state["victim_detections"]):
-                    c_v1, c_v2, c_v3, c_v4 = st.columns([2, 2, 2, 3])
-                    c_v1.write(f"**ID:** `{v['id']}`")
-                    c_v2.write(f"**Sector:** {v['sector']} ({v['confidence']}%)")
-                    c_v3.write(f"**Status:** `{v['status']}`")
-                    with c_v4:
-                        col_b1, col_b2 = st.columns(2)
-                        with col_b1:
-                            if v['status'] == "UNVERIFIED":
-                                if st.button(f"✅ Confirm", key=f"verify_{idx}"):
-                                    st.session_state["victim_detections"][idx]["status"] = "VERIFIED"
-                                    st.rerun()
-                            else:
-                                st.success("VERIFIED")
-                        with col_b2:
-                            if st.button(f"❌ Remove", key=f"del_{idx}"):
-                                to_delete = idx
-
-                if to_delete is not None:
-                    st.session_state["victim_detections"].pop(to_delete)
-                    st.rerun()
         except Exception as e:
-            st.error(f"Error executing computer vision pipeline: {e}")
+            st.error(f"Error executing flood-water analysis: {e}")
 
 # PAGE 4: EXPLAINABLE RISK & RADAR
 elif current_page == "Radar":

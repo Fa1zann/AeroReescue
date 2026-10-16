@@ -177,12 +177,18 @@ def render_location_widget():
     st.sidebar.subheader("📍 Live GPS Beacon & Sector Sync")
 
     if "rescuer_location" not in st.session_state:
+        # Neutral demo rescue base (no personal location, no network call at start-up)
+        from modules.rescue_route import DEFAULT_BASE_COORDS
         st.session_state["rescuer_location"] = {
-            "location": {"lat": 13.0125, "lon": 77.7040},
-            "info": get_address_from_coords(13.0125, 77.7040)
+            "location": {"lat": DEFAULT_BASE_COORDS[0], "lon": DEFAULT_BASE_COORDS[1]},
+            "info": {"full_address": "Demo rescue base (default position)",
+                     "display_short": "Demo rescue base (default)",
+                     "road": "", "suburb": "", "city": "", "state": ""}
         }
 
-    loc_mode = st.sidebar.radio("GPS Sensor Source:", ["Auto Live Position", "Manual Lat/Lon Input"], index=1)
+    loc_mode = st.sidebar.radio("GPS Sensor Source:", ["Auto Live Position (not enabled yet)", "Manual Lat/Lon Input"], index=1)
+    if loc_mode.startswith("Auto"):
+        st.sidebar.info("Browser GPS is not enabled in this build. Use manual coordinates; the position shown is a demo rescue base.")
 
     if loc_mode == "Manual Lat/Lon Input":
         c1, c2 = st.sidebar.columns(2)
@@ -199,7 +205,8 @@ def render_location_widget():
             st.session_state["active_df_risk"] = df_risk_new
             st.session_state["active_df_forecast"] = df_forecast_new
             st.session_state["selected_locality_voice"] = None
-            st.sidebar.success(f"Discovered nearby sectors around {addr_info['display_short']}")
+            st.session_state["zone_source"] = "simulated"
+            st.sidebar.success(f"Discovered nearby sectors around {addr_info['display_short']} (simulated risk values)")
             st.rerun()
 
     current_info = st.session_state["rescuer_location"]["info"]
@@ -218,7 +225,14 @@ def render_location_widget():
         st.session_state["active_df_risk"] = df_risk_new
         st.session_state["active_df_forecast"] = df_forecast_new
         st.session_state["selected_locality_voice"] = None
-        st.sidebar.success("Discovered real nearby regions around live position!")
+        st.session_state["zone_source"] = "simulated"
+        st.sidebar.success("Nearby place names found. Risk values for these sectors are SIMULATED.")
         st.rerun()
+
+    if st.session_state.get("zone_source") == "simulated":
+        st.sidebar.warning("Sectors are SIMULATED (random values around this position).")
+        if st.sidebar.button("↩️ Back to curated demo sectors", use_container_width=True):
+            st.session_state["zone_source"] = "curated"
+            st.rerun()
 
     return st.session_state["rescuer_location"]

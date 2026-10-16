@@ -24,7 +24,7 @@ DEFAULT_DEMO_WEATHER = {
     "source": "Demo Scenario Data"
 }
 
-def get_zone_weather(lat, lon, zone_id="Z1"):
+def get_zone_weather(lat, lon, zone_id="Z1", allow_live=True):
     """
     3-Tier Weather Pipeline:
     1. Live OpenWeatherMap API call
@@ -36,7 +36,7 @@ def get_zone_weather(lat, lon, zone_id="Z1"):
     # -------------------------------------------------------------------------
     # TIER 1: LIVE OPENWEATHERMAP API
     # -------------------------------------------------------------------------
-    if api_key and api_key != "YOUR_API_KEY_HERE" and api_key != "your_actual_api_key_here":
+    if allow_live and api_key and api_key != "YOUR_API_KEY_HERE" and api_key != "your_actual_api_key_here":
         url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={api_key}&units=metric"
         try:
             response = requests.get(url, timeout=3.5)
